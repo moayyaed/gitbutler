@@ -43,11 +43,11 @@ fn merge_first_branch_into_gb_local_and_verify_rebase() -> anyhow::Result<()> {
 
     // Verify git log shows both branches before merge
     insta::assert_snapshot!(env.git_log()?, @r"
-    *   d2f5915 (HEAD -> gitbutler/workspace) GitButler Workspace Commit
+    *   7d1d22f (HEAD -> gitbutler/workspace) GitButler Workspace Commit
     |\  
-    | * edca1cd (second-branch) second commit on branch B
-    * | 549e10c (first-branch) first commit on branch A
+    * | bc560e9 (first-branch) first commit on branch A
     |/  
+    * edca1cd (second-branch) second commit on branch B
     * 85efbe4 (gb-local/main, gb-local/HEAD, main, gitbutler/target) M
     ");
 
@@ -68,20 +68,21 @@ fn merge_first_branch_into_gb_local_and_verify_rebase() -> anyhow::Result<()> {
         .success()
         .stdout_eq(str![[r#"
 
-Found 2 upstream commits on gb-local/main
-   61888c9 Merge branch 'first-branch'
-   549e10c first commit on branch A
+Found 3 upstream commits on gb-local/main
+   e0e7be6 Merge branch 'first-branch'
+   bc560e9 first commit on branch A
+   edca1cd second commit on branch B
 
 Updating 2 active branches...
 
-Rebase of second-branch successful
 
 Branch first-branch has been integrated upstream and removed locally
+Branch second-branch has been integrated upstream and removed locally
 
 Summary
 ────────
-  second-branch - rebased
   first-branch - integrated
+  second-branch - integrated
 
 To undo this operation:
   Run `but undo`
@@ -123,7 +124,7 @@ To undo this operation:
     let file1_content = std::fs::read_to_string(env.projects_root().join("file1.txt"))?;
     assert_eq!(file1_content, "content1");
 
-    // Verify that only the second branch remains in the workspace
+    // Verify that both local branches were integrated and removed from the workspace
     let status_after = env
         .but("status --json")
         .allow_json()
@@ -135,43 +136,49 @@ To undo this operation:
     let status_after_str = String::from_utf8_lossy(&status_after);
     let status_after_json: serde_json::Value = serde_json::from_str(&status_after_str)?;
 
-    // Should only have one stack now (second-branch)
+    // Both branches were integrated as upstream commits.
     assert_eq!(
         status_after_json["stacks"].as_array().unwrap().len(),
-        1,
-        "Only second-branch should remain after merge"
+        0,
+        "No local stacks should remain after merge"
     );
 
-    // Verify the second branch is rebased on top of the updated main
-    let second_branch_base = std::process::Command::new("git")
+    let first_branch_exists = std::process::Command::new("git")
         .arg("-C")
         .arg(env.projects_root())
-        .arg("merge-base")
-        .arg("main")
-        .arg("second-branch")
+        .arg("rev-parse")
+        .arg("--verify")
+        .arg("first-branch")
         .output()?;
-    let second_branch_base_hash = String::from_utf8_lossy(&second_branch_base.stdout)
-        .trim()
-        .to_string();
-
-    // The merge base should be the new main (the second branch was rebased)
-    assert_eq!(
-        second_branch_base_hash, main_after_hash,
-        "second-branch should be rebased on top of the merged main"
+    assert!(
+        !first_branch_exists.status.success(),
+        "first-branch should be removed after integration"
     );
 
-    // Verify git log shows the rebased structure
+    let second_branch_exists = std::process::Command::new("git")
+        .arg("-C")
+        .arg(env.projects_root())
+        .arg("rev-parse")
+        .arg("--verify")
+        .arg("second-branch")
+        .output()?;
+    assert!(
+        !second_branch_exists.status.success(),
+        "second-branch should be removed after integration"
+    );
+
+    // Verify git log shows the integrated structure
     insta::assert_snapshot!(env.git_log()?, @r"
-    * c7f0f9d (HEAD -> gitbutler/workspace) GitButler Workspace Commit
-    * e8d7818 (second-branch) second commit on branch B
-    *   61888c9 (gb-local/main, gb-local/HEAD, main) Merge branch 'first-branch'
+    * 70954b7 (HEAD -> gitbutler/workspace) GitButler Workspace Commit
+    *   e0e7be6 (gb-local/main, gb-local/HEAD, main) Merge branch 'first-branch'
     |\  
-    | | * d2f5915 (gb-local/gitbutler/workspace) GitButler Workspace Commit
+    | | * 7d1d22f (gb-local/gitbutler/workspace) GitButler Workspace Commit
     | |/| 
     |/| | 
-    | | * edca1cd (gb-local/second-branch) second commit on branch B
+    * | | bc560e9 (gb-local/first-branch) first commit on branch A
     | |/  
-    * / 549e10c (gb-local/first-branch) first commit on branch A
+    |/|   
+    * | edca1cd (gb-local/second-branch) second commit on branch B
     |/  
     * 85efbe4 (gb-local/gitbutler/target, gitbutler/target) M
     ");

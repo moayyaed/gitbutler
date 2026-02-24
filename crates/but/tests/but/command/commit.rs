@@ -125,6 +125,52 @@ fn commit_with_branch_hint() -> anyhow::Result<()> {
 }
 
 #[test]
+fn commit_to_branch_moves_only_target_branch_ref() -> anyhow::Result<()> {
+    let env = Sandbox::init_scenario_with_target_and_default_settings("one-stack")?;
+    env.setup_metadata(&["A"])?;
+
+    // Simulate a branch tip shared by local and remote-tracking refs.
+    env.invoke_git("update-ref refs/remotes/origin/A refs/heads/A");
+
+    let old_a_tip = env.open_repo()?.find_reference("A")?.peel_to_id()?.detach();
+
+    env.file("scoped-commit.txt", "scoped");
+    env.but("commit -m 'Scoped commit' A")
+        .assert()
+        .success()
+        .stdout_eq(str![[r#"
+✓ Created commit [..] on branch A
+
+"#]]);
+
+    let repo = env.open_repo()?;
+    let new_a_tip = repo.find_reference("A")?.peel_to_id()?.detach();
+    let origin_a_tip = repo
+        .find_reference("refs/remotes/origin/A")?
+        .peel_to_id()?
+        .detach();
+
+    assert_ne!(new_a_tip, old_a_tip, "target branch should advance");
+    assert_eq!(
+        origin_a_tip, old_a_tip,
+        "remote-tracking ref must remain unchanged"
+    );
+
+    let new_commit = repo.find_commit(new_a_tip)?;
+    assert_eq!(
+        new_commit
+            .parent_ids()
+            .next()
+            .expect("new commit has parent")
+            .detach(),
+        old_a_tip,
+        "new commit should be based on the original target branch tip"
+    );
+
+    Ok(())
+}
+
+#[test]
 fn commit_with_nonexistent_branch_fails() -> anyhow::Result<()> {
     let env = Sandbox::init_scenario_with_target_and_default_settings("two-stacks")?;
     insta::assert_snapshot!(env.git_log()?, @r"
