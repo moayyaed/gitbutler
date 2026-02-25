@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use but_core::{
     RefMetadata,
     ref_metadata::{StackId, WorkspaceCommitRelation, WorkspaceStack, WorkspaceStackBranch},
@@ -3835,6 +3837,51 @@ fn multiple_stacks_with_shared_parent_and_remote() -> anyhow::Result<()> {
             ├── 🟣b627ca7
             └── ❄️e255adc (🏘️)
     ");
+    Ok(())
+}
+
+#[test]
+fn shared_commits_can_be_in_multiple_stacks_without_local_remote_overlap() -> anyhow::Result<()> {
+    let (repo, mut meta) =
+        read_only_in_memory_scenario("ws/multiple-stacks-with-shared-segment-and-remote")?;
+
+    add_stack_with_segments(&mut meta, 1, "C-on-A", StackState::InWorkspace, &[]);
+    let ws = Graph::from_head(&repo, &*meta, standard_options())?
+        .validated()?
+        .into_workspace()?;
+
+    for stack in &ws.stacks {
+        for segment in &stack.segments {
+            let local_commit_ids: HashSet<_> =
+                segment.commits.iter().map(|commit| commit.id).collect();
+            let overlap: Vec<_> = segment
+                .commits_on_remote
+                .iter()
+                .map(|commit| commit.id)
+                .filter(|id| local_commit_ids.contains(id))
+                .collect();
+            assert!(
+                overlap.is_empty(),
+                "segment {:?} must not list the same commit as local and remote: {:?}",
+                segment.ref_name(),
+                overlap
+            );
+        }
+    }
+
+    let shared_commit = id_by_rev(&repo, "A").detach();
+    let occurrences = ws
+        .stacks
+        .iter()
+        .flat_map(|stack| stack.segments.iter())
+        .flat_map(|segment| segment.commits.iter())
+        .filter(|commit| commit.id == shared_commit)
+        .count();
+    assert_eq!(
+        occurrences, 2,
+        "the shared local commit should be visible from both stacks"
+    );
+
     Ok(())
 }
 
